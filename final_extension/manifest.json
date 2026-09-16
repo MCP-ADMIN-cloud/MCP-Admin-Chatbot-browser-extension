@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "MCP Admin Plugin",
+  "version": "1.0",
+  "description": "A resizable chatbot interface to connect to any MCP server and chat using Gemini or OpenAI.",
+  "action": {
+    "default_title": "Open MCP Admin Plugin"
+  },
+  "side_panel": {
+    "default_path": "index.html"
+  },
+  "permissions": [
+    "storage",
+    "sidePanel"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "host_permissions": [
+    "*://*.mcpadmin.cloud/*",
+    "https://api.openai.com/*",
+    "https://generativelanguage.googleapis.com/*"
+  ]
+}

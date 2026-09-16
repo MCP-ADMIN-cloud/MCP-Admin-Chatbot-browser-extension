@@ -1,0 +1,6 @@
+{
+  "name": "MCP Admin Plugin",
+  "description": "A resizable chatbot interface to connect to any MCP server and chat using Gemini or OpenAI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
