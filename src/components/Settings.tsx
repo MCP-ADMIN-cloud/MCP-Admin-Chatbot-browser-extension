@@ -46,8 +46,7 @@ export function SettingsModal({ settings, onSave, onClose }: Props) {
     setIsLoadingModels(true);
     setModelsError("");
     try {
-      const apiKey = local.provider === "openai" ? local.openaiKey : local.geminiKey;
-      const models = await fetchModels(local.provider, apiKey);
+      const models = await fetchModels(local);
       if (models.length > 0) {
         setAvailableModels(models);
         if (!models.includes(local.model)) {
@@ -55,7 +54,7 @@ export function SettingsModal({ settings, onSave, onClose }: Props) {
           setLocal(prev => ({ ...prev, model: models[0] }));
         }
       } else {
-        setModelsError("No models found. Check API key.");
+        setModelsError("No models found. Check configuration.");
       }
     } catch (e: any) {
       setModelsError(e.message || "Failed to load models");
@@ -135,6 +134,16 @@ export function SettingsModal({ settings, onSave, onClose }: Props) {
             >
               OpenAI
             </button>
+            <button
+              onClick={() => handleChange("provider", "ollama")}
+              className={`flex-1 py-1.5 text-sm font-semibold rounded-lg transition-all ${
+                local.provider === "ollama" 
+                  ? "bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white shadow-sm" 
+                  : "text-neutral-500 hover:text-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-200"
+              }`}
+            >
+              Ollama
+            </button>
           </div>
 
           {local.provider === "gemini" && (
@@ -159,6 +168,19 @@ export function SettingsModal({ settings, onSave, onClose }: Props) {
                 onChange={(e) => handleChange("openaiKey", e.target.value)}
                 className="w-full rounded-xl border border-neutral-300 bg-neutral-50 px-3 py-2.5 text-sm transition-all focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-500/10 dark:border-white/10 dark:bg-neutral-900/50 dark:focus:border-indigo-500 dark:focus:ring-indigo-500/20"
                 placeholder="sk-..."
+              />
+            </div>
+          )}
+
+          {local.provider === "ollama" && (
+            <div className="space-y-1.5 animate-in fade-in zoom-in-95 duration-200">
+              <label className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">Ollama Base URL</label>
+              <input
+                type="text"
+                value={local.ollamaUrl}
+                onChange={(e) => handleChange("ollamaUrl", e.target.value)}
+                className="w-full rounded-xl border border-neutral-300 bg-neutral-50 px-3 py-2.5 text-sm transition-all focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-500/10 dark:border-white/10 dark:bg-neutral-900/50 dark:focus:border-indigo-500 dark:focus:ring-indigo-500/20"
+                placeholder="http://localhost:11434"
               />
             </div>
           )}

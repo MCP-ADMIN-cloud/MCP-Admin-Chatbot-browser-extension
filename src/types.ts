@@ -3,8 +3,9 @@ export interface Settings {
   geminiKey: string;
   mcpAdminApiKey: string;
   theme: "light" | "dark";
-  provider: "gemini" | "openai";
+  provider: "gemini" | "openai" | "ollama";
   model: string;
+  ollamaUrl: string;
 }
 
 export interface McpServerDef {

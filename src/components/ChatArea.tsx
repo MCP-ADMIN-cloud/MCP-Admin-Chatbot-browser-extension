@@ -25,7 +25,8 @@ export function ChatArea({ messages, isGenerating, mcpTools, onSendMessage, sett
   const isMcpMissing = !settings.mcpAdminApiKey;
   const isProviderMissing = 
     (settings.provider === "gemini" && !settings.geminiKey) || 
-    (settings.provider === "openai" && !settings.openaiKey);
+    (settings.provider === "openai" && !settings.openaiKey) ||
+    (settings.provider === "ollama" && !settings.ollamaUrl);
   
   const needsSetup = isMcpMissing || isProviderMissing || !settings.model;
 
@@ -63,7 +64,9 @@ export function ChatArea({ messages, isGenerating, mcpTools, onSendMessage, sett
           </div>
           <div className="flex items-center space-x-3 p-3 rounded-xl border border-neutral-200 dark:border-white/10 bg-white dark:bg-white/5">
             <div className={`w-2 h-2 rounded-full ${isProviderMissing ? 'bg-red-500 animate-pulse' : 'bg-emerald-500'}`} />
-            <span className="text-sm font-medium text-neutral-700 dark:text-neutral-300 capitalize">{settings.provider} API Key</span>
+            <span className="text-sm font-medium text-neutral-700 dark:text-neutral-300 capitalize">
+              {settings.provider === "ollama" ? "Ollama Base URL" : `${settings.provider} API Key`}
+            </span>
           </div>
           <div className="flex items-center space-x-3 p-3 rounded-xl border border-neutral-200 dark:border-white/10 bg-white dark:bg-white/5">
             <div className={`w-2 h-2 rounded-full ${!settings.model ? 'bg-red-500 animate-pulse' : 'bg-emerald-500'}`} />

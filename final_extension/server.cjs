@@ -173,6 +173,26 @@ async function startServer() {
             ]
           });
         }
+      } else if (provider === "ollama") {
+        const { ollamaUrl } = req.body;
+        const baseUrl = ollamaUrl || "http://localhost:11434";
+        const openai = new import_openai.default({
+          apiKey: "ollama",
+          baseURL: `${baseUrl.replace(/\/$/, "")}/v1`
+        });
+        const cleanMessages = messages.map((m) => {
+          const cleanMsg = { role: m.role, content: m.content || null };
+          if (m.name) cleanMsg.name = m.name;
+          if (m.tool_calls) cleanMsg.tool_calls = m.tool_calls;
+          if (m.tool_call_id) cleanMsg.tool_call_id = m.tool_call_id;
+          return cleanMsg;
+        });
+        const response = await openai.chat.completions.create({
+          model: model || "llama3.2",
+          messages: cleanMessages,
+          tools: tools?.length > 0 ? tools : void 0
+        });
+        res.json(response);
       } else {
         throw new Error("Invalid provider");
       }
@@ -199,6 +219,14 @@ async function startServer() {
         if (!response.ok) throw new Error("Failed to fetch Gemini models");
         const data = await response.json();
         const chatModels = data.models.filter((m) => m.supportedGenerationMethods.includes("generateContent")).map((m) => m.name.replace("models/", ""));
+        res.json(chatModels);
+      } else if (provider === "ollama") {
+        const { ollamaUrl } = req.body;
+        const baseUrl = ollamaUrl || "http://localhost:11434";
+        const response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/tags`);
+        if (!response.ok) throw new Error("Failed to fetch Ollama models");
+        const data = await response.json();
+        const chatModels = data.models.map((m) => m.name);
         res.json(chatModels);
       } else {
         res.json([]);

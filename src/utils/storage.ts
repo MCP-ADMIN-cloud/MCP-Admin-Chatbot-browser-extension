@@ -11,6 +11,7 @@ export const defaultSettings: Settings = {
   theme: "dark",
   provider: "gemini",
   model: "gemini-2.5-flash",
+  ollamaUrl: "http://localhost:11434",
 };
 
 export function loadSettings(): Settings {
