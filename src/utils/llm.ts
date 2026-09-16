@@ -59,7 +59,8 @@ export async function fetchModels(settings: Settings): Promise<string[]> {
 export async function chatCompletion(
   settings: Settings,
   messages: Message[],
-  mcpTools: McpTool[]
+  mcpTools: McpTool[],
+  onUpdate?: (text: string) => void
 ) {
   const tools = mcpTools.map((t) => ({
     type: "function",
@@ -94,6 +95,7 @@ export async function chatCompletion(
         model: settings.model || "llama3.2",
         messages: cleanMessages,
         tools: tools?.length > 0 ? tools : undefined,
+        stream: true,
       })
     });
 
@@ -104,8 +106,48 @@ export async function chatCompletion(
       throw new Error(`Ollama Error: ${res.status} ${res.statusText}`);
     }
 
-    const data = await res.json();
-    return data.choices[0].message;
+    const reader = res.body?.getReader();
+    const decoder = new TextDecoder();
+    let fullContent = "";
+    let toolCalls: any[] = [];
+    
+    if (reader) {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split('\n');
+        for (const line of lines) {
+          if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+            try {
+              const data = JSON.parse(line.slice(6));
+              const delta = data.choices[0]?.delta;
+              if (delta?.content) {
+                fullContent += delta.content;
+                if (onUpdate) onUpdate(fullContent);
+              }
+              if (delta?.tool_calls) {
+                for (const tc of delta.tool_calls) {
+                  if (!toolCalls[tc.index]) {
+                    toolCalls[tc.index] = { ...tc };
+                  } else {
+                    if (tc.function?.arguments) {
+                      toolCalls[tc.index].function.arguments += tc.function.arguments;
+                    }
+                  }
+                }
+              }
+            } catch (e) {}
+          }
+        }
+      }
+    }
+
+    if (toolCalls.length > 0) {
+      return { role: "assistant", content: fullContent || null, tool_calls: toolCalls.filter(Boolean) };
+    }
+    
+    return { role: "assistant", content: fullContent };
   }
 
   if (!isExtension) {
@@ -123,6 +165,10 @@ export async function chatCompletion(
     });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
+    
+    if (onUpdate && data.choices[0].message.content) {
+      onUpdate(data.choices[0].message.content);
+    }
     return data.choices[0].message;
   }
 
@@ -138,13 +184,40 @@ export async function chatCompletion(
       return cleanMsg;
     });
 
-    const response = await openai.chat.completions.create({
+    const responseStream = await openai.chat.completions.create({
       model: settings.model || "gpt-4o-mini",
       messages: cleanMessages,
       tools: tools?.length > 0 ? (tools as any) : undefined,
+      stream: true,
     });
     
-    return response.choices[0].message;
+    let fullContent = "";
+    let toolCalls: any[] = [];
+    
+    for await (const chunk of responseStream) {
+      const delta = chunk.choices[0]?.delta;
+      if (delta?.content) {
+        fullContent += delta.content;
+        if (onUpdate) onUpdate(fullContent);
+      }
+      if (delta?.tool_calls) {
+        for (const tc of delta.tool_calls) {
+          if (!toolCalls[tc.index]) {
+            toolCalls[tc.index] = { ...tc };
+          } else {
+            if (tc.function?.arguments) {
+              toolCalls[tc.index].function.arguments += tc.function.arguments;
+            }
+          }
+        }
+      }
+    }
+    
+    if (toolCalls.length > 0) {
+      return { role: "assistant", content: fullContent || null, tool_calls: toolCalls.filter(Boolean) };
+    }
+    
+    return { role: "assistant", content: fullContent };
 
   } else if (settings.provider === "gemini") {
     if (!apiKey) throw new Error("Gemini API key is required");
@@ -189,38 +262,49 @@ export async function chatCompletion(
       ? [{ functionDeclarations: tools.map((t: any) => t.function) }]
       : undefined;
 
-    const response = await ai.models.generateContent({
+    const responseStream = await ai.models.generateContentStream({
       model: settings.model || "gemini-2.5-flash",
       contents,
       tools: geminiTools,
     });
 
-    const candidate = response.candidates?.[0];
-    const part = candidate?.content?.parts?.[0];
-    
-    if (part?.functionCall) {
-      const calls = candidate.content.parts
-        .filter((p: any) => p.functionCall)
-        .map((p: any) => ({
-          id: "call_" + Math.random().toString(36).substr(2, 9),
-          type: "function",
-          function: {
-            name: p.functionCall!.name,
-            arguments: JSON.stringify(p.functionCall!.args),
-          },
-        }));
+    let fullContent = "";
+    let toolCalls: any[] = [];
+
+    for await (const chunk of responseStream) {
+      const candidate = chunk.candidates?.[0];
+      const part = candidate?.content?.parts?.[0];
       
+      if (part?.text) {
+        fullContent += part.text;
+        if (onUpdate) onUpdate(fullContent);
+      } else if (part?.functionCall) {
+        const calls = candidate.content.parts
+          .filter((p: any) => p.functionCall)
+          .map((p: any) => ({
+            id: "call_" + Math.random().toString(36).substr(2, 9),
+            type: "function",
+            function: {
+              name: p.functionCall!.name,
+              arguments: JSON.stringify(p.functionCall!.args),
+            },
+          }));
+        toolCalls.push(...calls);
+      }
+    }
+
+    if (toolCalls.length > 0) {
       return {
         role: "assistant",
-        content: null,
-        tool_calls: calls,
-      };
-    } else {
-      return {
-        role: "assistant",
-        content: part?.text || "",
+        content: fullContent || null,
+        tool_calls: toolCalls,
       };
     }
+    
+    return {
+      role: "assistant",
+      content: fullContent,
+    };
   }
 
   throw new Error("Invalid provider");

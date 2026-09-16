@@ -157,10 +157,24 @@ export default function App() {
       let isDone = false;
       
       while (!isDone) {
-        const aiResponse = await chatCompletion(settings, currentMessages, mcpTools);
+        const aiMessageId = uuidv4();
+        let currentMessagesWithPlaceholder = [...currentMessages, {
+          id: aiMessageId,
+          role: "assistant",
+          content: "",
+        }];
+        updateCurrentSession({ messages: currentMessagesWithPlaceholder });
+
+        const aiResponse = await chatCompletion(settings, currentMessages, mcpTools, (text) => {
+          updateCurrentSession({ 
+            messages: currentMessagesWithPlaceholder.map(m => 
+              m.id === aiMessageId ? { ...m, content: text } : m
+            ) 
+          });
+        });
         
         const aiMessage: Message = {
-          id: uuidv4(),
+          id: aiMessageId,
           role: "assistant",
           content: aiResponse.content || "",
           tool_calls: aiResponse.tool_calls,
