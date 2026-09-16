@@ -8,6 +8,16 @@ export async function fetchModels(settings: Settings): Promise<string[]> {
   const { provider } = settings;
   const apiKey = provider === "openai" ? settings.openaiKey : settings.geminiKey;
   try {
+    // Ollama MUST be fetched from the client side because the cloud server cannot reach the user's localhost
+    if (provider === "ollama") {
+      const baseUrl = settings.ollamaUrl || "http://localhost:11434";
+      const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/tags`);
+      if (!response.ok) throw new Error("Failed to fetch Ollama models");
+      const data = await response.json();
+      const chatModels = data.models.map((m: any) => m.name);
+      return chatModels;
+    }
+
     if (!isExtension) {
       const res = await fetch("/api/models", {
         method: "POST",
@@ -38,13 +48,6 @@ export async function fetchModels(settings: Settings): Promise<string[]> {
         .filter((m: any) => m.supportedGenerationMethods.includes("generateContent"))
         .map((m: any) => m.name.replace("models/", ""));
       return chatModels;
-    } else if (provider === "ollama") {
-      const baseUrl = settings.ollamaUrl || "http://localhost:11434";
-      const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/tags`);
-      if (!response.ok) throw new Error("Failed to fetch Ollama models");
-      const data = await response.json();
-      const chatModels = data.models.map((m: any) => m.name);
-      return chatModels;
     }
     return [];
   } catch (error) {
@@ -69,6 +72,32 @@ export async function chatCompletion(
 
   const apiKey = settings.provider === "openai" ? settings.openaiKey : settings.geminiKey;
   
+  // Ollama MUST be fetched from the client side
+  if (settings.provider === "ollama") {
+    const baseUrl = settings.ollamaUrl || "http://localhost:11434";
+    const openai = new OpenAI({ 
+      apiKey: "ollama", 
+      baseURL: `${baseUrl.replace(/\/$/, '')}/v1`,
+      dangerouslyAllowBrowser: true 
+    });
+    
+    const cleanMessages = messages.map((m: any) => {
+      const cleanMsg: any = { role: m.role, content: m.content || null };
+      if (m.name) cleanMsg.name = m.name;
+      if (m.tool_calls) cleanMsg.tool_calls = m.tool_calls;
+      if (m.tool_call_id) cleanMsg.tool_call_id = m.tool_call_id;
+      return cleanMsg;
+    });
+
+    const response = await openai.chat.completions.create({
+      model: settings.model || "llama3.2",
+      messages: cleanMessages,
+      tools: tools?.length > 0 ? (tools as any) : undefined,
+    });
+    
+    return response.choices[0].message;
+  }
+
   if (!isExtension) {
     const res = await fetch("/api/llm", {
       method: "POST",
@@ -182,29 +211,6 @@ export async function chatCompletion(
         content: part?.text || "",
       };
     }
-  } else if (settings.provider === "ollama") {
-    const baseUrl = settings.ollamaUrl || "http://localhost:11434";
-    const openai = new OpenAI({ 
-      apiKey: "ollama", 
-      baseURL: `${baseUrl.replace(/\/$/, '')}/v1`,
-      dangerouslyAllowBrowser: true 
-    });
-    
-    const cleanMessages = messages.map((m: any) => {
-      const cleanMsg: any = { role: m.role, content: m.content || null };
-      if (m.name) cleanMsg.name = m.name;
-      if (m.tool_calls) cleanMsg.tool_calls = m.tool_calls;
-      if (m.tool_call_id) cleanMsg.tool_call_id = m.tool_call_id;
-      return cleanMsg;
-    });
-
-    const response = await openai.chat.completions.create({
-      model: settings.model || "llama3.2",
-      messages: cleanMessages,
-      tools: tools?.length > 0 ? (tools as any) : undefined,
-    });
-    
-    return response.choices[0].message;
   }
 
   throw new Error("Invalid provider");
