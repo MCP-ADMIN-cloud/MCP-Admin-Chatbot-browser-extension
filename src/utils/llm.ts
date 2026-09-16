@@ -75,11 +75,6 @@ export async function chatCompletion(
   // Ollama MUST be fetched from the client side
   if (settings.provider === "ollama") {
     const baseUrl = settings.ollamaUrl || "http://localhost:11434";
-    const openai = new OpenAI({ 
-      apiKey: "ollama", 
-      baseURL: `${baseUrl.replace(/\/$/, '')}/v1`,
-      dangerouslyAllowBrowser: true 
-    });
     
     const cleanMessages = messages.map((m: any) => {
       const cleanMsg: any = { role: m.role, content: m.content || null };
@@ -89,13 +84,28 @@ export async function chatCompletion(
       return cleanMsg;
     });
 
-    const response = await openai.chat.completions.create({
-      model: settings.model || "llama3.2",
-      messages: cleanMessages,
-      tools: tools?.length > 0 ? (tools as any) : undefined,
+    const res = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer ollama"
+      },
+      body: JSON.stringify({
+        model: settings.model || "llama3.2",
+        messages: cleanMessages,
+        tools: tools?.length > 0 ? tools : undefined,
+      })
     });
-    
-    return response.choices[0].message;
+
+    if (!res.ok) {
+      if (res.status === 403) {
+        throw new Error("Ollama blocked the request (403). Please COMPLETELY close the Ollama app (from the system tray) and restart it from a terminal using: OLLAMA_ORIGINS=\"*\" ollama serve");
+      }
+      throw new Error(`Ollama Error: ${res.status} ${res.statusText}`);
+    }
+
+    const data = await res.json();
+    return data.choices[0].message;
   }
 
   if (!isExtension) {
