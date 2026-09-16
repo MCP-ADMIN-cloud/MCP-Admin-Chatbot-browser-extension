@@ -1,5 +1,5 @@
-import { Message, McpTool } from "../types";
-import { Send, Wrench, Bot, User } from "lucide-react";
+import { Message, McpTool, Settings } from "../types";
+import { Send, Wrench, Bot, Settings as SettingsIcon, AlertCircle } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import { clsx, type ClassValue } from "clsx";
@@ -14,11 +14,20 @@ interface Props {
   isGenerating: boolean;
   mcpTools: McpTool[];
   onSendMessage: (content: string) => void;
+  settings: Settings;
+  onOpenSettings: () => void;
 }
 
-export function ChatArea({ messages, isGenerating, mcpTools, onSendMessage }: Props) {
+export function ChatArea({ messages, isGenerating, mcpTools, onSendMessage, settings, onOpenSettings }: Props) {
   const [input, setInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const isMcpMissing = !settings.mcpAdminApiKey;
+  const isProviderMissing = 
+    (settings.provider === "gemini" && !settings.geminiKey) || 
+    (settings.provider === "openai" && !settings.openaiKey);
+  
+  const needsSetup = isMcpMissing || isProviderMissing || !settings.model;
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -30,10 +39,48 @@ export function ChatArea({ messages, isGenerating, mcpTools, onSendMessage }: Pr
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isGenerating) return;
+    if (!input.trim() || isGenerating || needsSetup) return;
     onSendMessage(input.trim());
     setInput("");
   };
+
+  if (needsSetup) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center bg-[#FAFAFA]/50 dark:bg-[#09090b] p-6 text-center">
+        <div className="relative mb-6 flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-500/10 to-amber-500/5 dark:from-amber-500/20 dark:to-amber-500/5 shadow-inner border border-amber-500/20">
+          <div className="absolute inset-0 rounded-2xl bg-amber-500/20 blur-xl"></div>
+          <AlertCircle size={36} className="text-amber-500 relative z-10" strokeWidth={1.5} />
+        </div>
+        <h2 className="text-2xl font-bold text-neutral-800 dark:text-neutral-200 tracking-tight mb-2">Setup Required</h2>
+        <p className="max-w-md text-[15px] leading-relaxed text-neutral-600 dark:text-neutral-400 mb-8">
+          To start chatting and executing tools, please configure your API keys and model preferences.
+        </p>
+        
+        <div className="w-full max-w-sm space-y-3 mb-8 text-left">
+          <div className="flex items-center space-x-3 p-3 rounded-xl border border-neutral-200 dark:border-white/10 bg-white dark:bg-white/5">
+            <div className={`w-2 h-2 rounded-full ${isMcpMissing ? 'bg-red-500 animate-pulse' : 'bg-emerald-500'}`} />
+            <span className="text-sm font-medium text-neutral-700 dark:text-neutral-300">MCP Admin API Key</span>
+          </div>
+          <div className="flex items-center space-x-3 p-3 rounded-xl border border-neutral-200 dark:border-white/10 bg-white dark:bg-white/5">
+            <div className={`w-2 h-2 rounded-full ${isProviderMissing ? 'bg-red-500 animate-pulse' : 'bg-emerald-500'}`} />
+            <span className="text-sm font-medium text-neutral-700 dark:text-neutral-300 capitalize">{settings.provider} API Key</span>
+          </div>
+          <div className="flex items-center space-x-3 p-3 rounded-xl border border-neutral-200 dark:border-white/10 bg-white dark:bg-white/5">
+            <div className={`w-2 h-2 rounded-full ${!settings.model ? 'bg-red-500 animate-pulse' : 'bg-emerald-500'}`} />
+            <span className="text-sm font-medium text-neutral-700 dark:text-neutral-300">AI Model Selected</span>
+          </div>
+        </div>
+
+        <button
+          onClick={onOpenSettings}
+          className="flex items-center space-x-2 rounded-xl bg-gradient-to-br from-indigo-500 to-indigo-600 px-6 py-3 text-sm font-semibold text-white shadow-md shadow-indigo-500/20 hover:scale-105 transition-all active:scale-[0.98]"
+        >
+          <SettingsIcon size={16} strokeWidth={2.5} />
+          <span>Open Settings</span>
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full flex-col bg-[#FAFAFA]/50 dark:bg-[#09090b]">

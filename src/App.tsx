@@ -7,7 +7,7 @@ import { ChatArea } from "./components/ChatArea";
 import { v4 as uuidv4 } from "uuid";
 import { fetchMcpTools, callMcpTool, fetchMcpServers } from "./utils/mcp";
 import { chatCompletion } from "./utils/llm";
-import { Menu, Server } from "lucide-react";
+import { Menu, Server, RefreshCw } from "lucide-react";
 
 export default function App() {
   const [settings, setSettings] = useState<Settings>(loadSettings());
@@ -19,6 +19,7 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   
   const [mcpServers, setMcpServers] = useState<McpServerDef[]>([]);
+  const [isFetchingServers, setIsFetchingServers] = useState(false);
   const [mcpTools, setMcpTools] = useState<McpTool[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
 
@@ -35,13 +36,25 @@ export default function App() {
   }, [settings.theme]);
 
   // Load MCP servers when API key changes
-  useEffect(() => {
+  const loadServers = useCallback(async () => {
     if (settings.mcpAdminApiKey) {
-      fetchMcpServers(settings.mcpAdminApiKey).then(setMcpServers);
+      setIsFetchingServers(true);
+      try {
+        const servers = await fetchMcpServers(settings.mcpAdminApiKey);
+        setMcpServers(servers);
+      } catch (e) {
+        console.error("Failed to load servers", e);
+      } finally {
+        setIsFetchingServers(false);
+      }
     } else {
       setMcpServers([]);
     }
   }, [settings.mcpAdminApiKey]);
+
+  useEffect(() => {
+    loadServers();
+  }, [loadServers]);
 
   const currentSession = sessions.find((s) => s.id === currentSessionId);
 
@@ -285,6 +298,14 @@ export default function App() {
                   <option value="sse" className="dark:bg-neutral-900">SSE</option>
                 </select>
               )}
+              <button 
+                onClick={loadServers} 
+                disabled={isFetchingServers}
+                className="ml-2 p-1 text-neutral-400 hover:text-indigo-500 dark:hover:text-indigo-400 disabled:opacity-50 transition-colors"
+                title="Refresh Servers"
+              >
+                <RefreshCw size={14} strokeWidth={2.5} className={isFetchingServers ? "animate-spin" : ""} />
+              </button>
             </div>
 
             <div className="text-[11px] font-bold tracking-widest uppercase text-neutral-400 dark:text-neutral-500 bg-neutral-100 dark:bg-white/5 px-2 py-1 rounded-md">
@@ -297,6 +318,8 @@ export default function App() {
             isGenerating={isGenerating}
             mcpTools={mcpTools}
             onSendMessage={handleSendMessage}
+            settings={settings}
+            onOpenSettings={() => setIsSettingsOpen(true)}
           />
         </div>
 
