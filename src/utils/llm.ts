@@ -4,18 +4,185 @@ import OpenAI from "openai";
 
 const isExtension = typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id;
 
+export function normalizeOllamaUrls(rawUrl?: string) {
+  let url = (rawUrl || "http://localhost:11434").trim().replace(/\/+$/, "");
+  if (!/^https?:\/\//i.test(url)) {
+    url = "http://" + url;
+  }
+  // Strip trailing /v1 if user appended it
+  const rootUrl = url.endsWith("/v1") ? url.slice(0, -3).replace(/\/+$/, "") : url;
+  const v1Url = `${rootUrl}/v1`;
+  return { rootUrl, v1Url };
+}
+
+// Background fetch helper when running in Chrome extension
+async function bgFetch(url: string, options?: any): Promise<string | null> {
+  if (!isExtension) return null;
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage({ type: "BG_FETCH", url, options }, (res) => {
+        if (chrome.runtime.lastError || !res?.ok) {
+          resolve(null);
+        } else {
+          resolve(res.data);
+        }
+      });
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+// Robust SSE stream parser that buffers lines across chunk boundaries
+async function parseSseStream(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  onUpdate?: (text: string) => void
+): Promise<{ role: string; content: string | null; tool_calls?: any[] }> {
+  const decoder = new TextDecoder();
+  let fullContent = "";
+  let toolCalls: any[] = [];
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    // Keep the last potentially incomplete line in buffer
+    buffer = lines.pop() || "";
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      let payload = line;
+      if (payload.startsWith("data: ")) {
+        payload = payload.slice(6).trim();
+      }
+      if (payload === "[DONE]") continue;
+
+      try {
+        const data = JSON.parse(payload);
+        // OpenAI / vLLM / Ollama-v1 delta format
+        const delta = data.choices?.[0]?.delta;
+        if (delta?.content) {
+          fullContent += delta.content;
+          if (onUpdate) onUpdate(fullContent);
+        }
+        if (delta?.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            const idx = tc.index ?? toolCalls.length;
+            if (!toolCalls[idx]) {
+              toolCalls[idx] = { ...tc };
+            } else {
+              if (tc.function?.arguments) {
+                toolCalls[idx].function.arguments =
+                  (toolCalls[idx].function.arguments || "") + tc.function.arguments;
+              }
+            }
+          }
+        }
+        // Ollama native format { message: { content: "..." } }
+        if (data.message?.content) {
+          fullContent += data.message.content;
+          if (onUpdate) onUpdate(fullContent);
+        }
+      } catch {
+        // Chunk is not complete JSON or is a ping; ignore
+      }
+    }
+  }
+
+  const validToolCalls = toolCalls.filter(Boolean);
+  if (validToolCalls.length > 0) {
+    return {
+      role: "assistant",
+      content: fullContent || null,
+      tool_calls: validToolCalls,
+    };
+  }
+
+  return {
+    role: "assistant",
+    content: fullContent,
+  };
+}
+
 export async function fetchModels(settings: Settings): Promise<string[]> {
   const { provider } = settings;
   const apiKey = provider === "openai" ? settings.openaiKey : settings.geminiKey;
   try {
-    // Ollama MUST be fetched from the client side because the cloud server cannot reach the user's localhost
     if (provider === "ollama") {
-      const baseUrl = settings.ollamaUrl || "http://localhost:11434";
-      const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/tags`);
-      if (!response.ok) throw new Error("Failed to fetch Ollama models");
-      const data = await response.json();
-      const chatModels = data.models.map((m: any) => m.name);
-      return chatModels;
+      const { rootUrl, v1Url } = normalizeOllamaUrls(settings.ollamaUrl);
+
+      // 1. Try direct Ollama native /api/tags
+      try {
+        const response = await fetch(`${rootUrl}/api/tags`);
+        if (response.ok) {
+          const data = await response.json();
+          if (Array.isArray(data.models) && data.models.length > 0) {
+            return data.models.map((m: any) => m.name || m.model || m.id);
+          }
+        }
+      } catch (e) {
+        // Fallback
+      }
+
+      // 2. Try direct OpenAI-compatible /v1/models
+      try {
+        const response = await fetch(`${v1Url}/models`);
+        if (response.ok) {
+          const data = await response.json();
+          if (Array.isArray(data.data) && data.data.length > 0) {
+            return data.data.map((m: any) => m.id);
+          }
+        }
+      } catch (e) {
+        // Fallback
+      }
+
+      // 3. Try background service worker fetch in Chrome Extension (bypasses extension page CORS)
+      if (isExtension) {
+        try {
+          const bgDataTags = await bgFetch(`${rootUrl}/api/tags`);
+          if (bgDataTags) {
+            const data = JSON.parse(bgDataTags);
+            if (Array.isArray(data.models) && data.models.length > 0) {
+              return data.models.map((m: any) => m.name || m.model || m.id);
+            }
+          }
+        } catch (e) {
+          // Fallback
+        }
+
+        try {
+          const bgDataModels = await bgFetch(`${v1Url}/models`);
+          if (bgDataModels) {
+            const data = JSON.parse(bgDataModels);
+            if (Array.isArray(data.data) && data.data.length > 0) {
+              return data.data.map((m: any) => m.id);
+            }
+          }
+        } catch (e) {
+          // Fallback
+        }
+      }
+
+      // 4. Try server-side proxy
+      try {
+        const res = await fetch("/api/models", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider, apiKey, ollamaUrl: settings.ollamaUrl }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) return data;
+        }
+      } catch (e) {
+        // Ignore
+      }
+
+      throw new Error(`Failed to fetch models from ${rootUrl}. Please verify endpoint URL and reachability.`);
     }
 
     if (!isExtension) {
@@ -73,9 +240,8 @@ export async function chatCompletion(
 
   const apiKey = settings.provider === "openai" ? settings.openaiKey : settings.geminiKey;
   
-  // Ollama MUST be fetched from the client side
   if (settings.provider === "ollama") {
-    const baseUrl = settings.ollamaUrl || "http://localhost:11434";
+    const { rootUrl, v1Url } = normalizeOllamaUrls(settings.ollamaUrl);
     
     const cleanMessages = messages.map((m: any) => {
       const cleanMsg: any = { role: m.role, content: m.content || null };
@@ -85,69 +251,70 @@ export async function chatCompletion(
       return cleanMsg;
     });
 
-    const res = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer ollama"
-      },
-      body: JSON.stringify({
-        model: settings.model || "llama3.2",
-        messages: cleanMessages,
-        tools: tools?.length > 0 ? tools : undefined,
-        stream: true,
-      })
-    });
+    let res: Response | null = null;
+    let fetchError: any = null;
+
+    try {
+      res = await fetch(`${v1Url}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer ollama"
+        },
+        body: JSON.stringify({
+          model: settings.model || "llama3.2",
+          messages: cleanMessages,
+          tools: tools?.length > 0 ? tools : undefined,
+          stream: true,
+        })
+      });
+    } catch (err: any) {
+      fetchError = err;
+    }
+
+    // Fallback to server streaming proxy if client direct fetch failed
+    if ((!res || !res.ok) && !isExtension) {
+      try {
+        const proxyRes = await fetch("/api/llm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "ollama",
+            apiKey,
+            model: settings.model,
+            messages,
+            tools,
+            ollamaUrl: settings.ollamaUrl,
+            stream: true,
+          }),
+        });
+        if (proxyRes.ok && proxyRes.body) {
+          const reader = proxyRes.body.getReader();
+          return await parseSseStream(reader, onUpdate);
+        }
+      } catch (e) {
+        // Fall through
+      }
+    }
+
+    if (!res) {
+      throw new Error(`Failed to connect to Ollama at ${v1Url}: ${fetchError?.message || "Network error"}`);
+    }
 
     if (!res.ok) {
       if (res.status === 403) {
-        throw new Error("Ollama blocked the request (403). Please COMPLETELY close the Ollama app (from the system tray) and restart it from a terminal using: OLLAMA_ORIGINS=\"*\" ollama serve");
+        throw new Error(`Ollama blocked the request (403). Please verify CORS settings (OLLAMA_ORIGINS="*" ollama serve) on ${rootUrl}`);
       }
       throw new Error(`Ollama Error: ${res.status} ${res.statusText}`);
     }
 
-    const reader = res.body?.getReader();
-    const decoder = new TextDecoder();
-    let fullContent = "";
-    let toolCalls: any[] = [];
-    
-    if (reader) {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n');
-        for (const line of lines) {
-          if (line.startsWith('data: ') && line !== 'data: [DONE]') {
-            try {
-              const data = JSON.parse(line.slice(6));
-              const delta = data.choices[0]?.delta;
-              if (delta?.content) {
-                fullContent += delta.content;
-                if (onUpdate) onUpdate(fullContent);
-              }
-              if (delta?.tool_calls) {
-                for (const tc of delta.tool_calls) {
-                  if (!toolCalls[tc.index]) {
-                    toolCalls[tc.index] = { ...tc };
-                  } else {
-                    if (tc.function?.arguments) {
-                      toolCalls[tc.index].function.arguments += tc.function.arguments;
-                    }
-                  }
-                }
-              }
-            } catch (e) {}
-          }
-        }
-      }
+    if (res.body) {
+      const reader = res.body.getReader();
+      return await parseSseStream(reader, onUpdate);
     }
 
-    if (toolCalls.length > 0) {
-      return { role: "assistant", content: fullContent || null, tool_calls: toolCalls.filter(Boolean) };
-    }
-    
-    return { role: "assistant", content: fullContent };
+    const data = await res.json();
+    return data.choices[0].message;
   }
 
   if (!isExtension) {
@@ -161,12 +328,18 @@ export async function chatCompletion(
         messages,
         tools,
         ollamaUrl: settings.ollamaUrl,
+        stream: true,
       }),
     });
+
+    if (res.ok && res.body) {
+      const reader = res.body.getReader();
+      return await parseSseStream(reader, onUpdate);
+    }
+
     const data = await res.json();
     if (data.error) throw new Error(data.error);
-    
-    if (onUpdate && data.choices[0].message.content) {
+    if (onUpdate && data.choices[0]?.message?.content) {
       onUpdate(data.choices[0].message.content);
     }
     return data.choices[0].message;

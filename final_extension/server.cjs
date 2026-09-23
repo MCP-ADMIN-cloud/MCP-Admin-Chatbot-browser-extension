@@ -78,7 +78,7 @@ async function startServer() {
   });
   app.post("/api/llm", async (req, res) => {
     try {
-      const { provider, apiKey, model, messages, tools } = req.body;
+      const { provider, apiKey, model, messages, tools, stream } = req.body;
       if (provider === "openai") {
         if (!apiKey) throw new Error("OpenAI API key is required");
         const openai = new import_openai.default({ apiKey });
@@ -89,6 +89,24 @@ async function startServer() {
           if (m.tool_call_id) cleanMsg.tool_call_id = m.tool_call_id;
           return cleanMsg;
         });
+        if (stream) {
+          res.setHeader("Content-Type", "text/event-stream");
+          res.setHeader("Cache-Control", "no-cache");
+          res.setHeader("Connection", "keep-alive");
+          const responseStream = await openai.chat.completions.create({
+            model: model || "gpt-4o-mini",
+            messages: cleanMessages,
+            tools: tools?.length > 0 ? tools : void 0,
+            stream: true
+          });
+          for await (const chunk of responseStream) {
+            res.write(`data: ${JSON.stringify(chunk)}
+
+`);
+          }
+          res.write("data: [DONE]\n\n");
+          return res.end();
+        }
         const response = await openai.chat.completions.create({
           model: model || "gpt-4o-mini",
           messages: cleanMessages,
@@ -134,6 +152,40 @@ async function startServer() {
           return { role: "user", parts: [{ text: m.content || "" }] };
         });
         const geminiTools = tools && tools.length > 0 ? [{ functionDeclarations: tools.map((t) => t.function) }] : void 0;
+        if (stream) {
+          res.setHeader("Content-Type", "text/event-stream");
+          res.setHeader("Cache-Control", "no-cache");
+          res.setHeader("Connection", "keep-alive");
+          const responseStream = await ai.models.generateContentStream({
+            model: model || "gemini-2.5-flash",
+            contents,
+            tools: geminiTools
+          });
+          for await (const chunk of responseStream) {
+            const candidate2 = chunk.candidates?.[0];
+            const part2 = candidate2?.content?.parts?.[0];
+            if (part2?.text) {
+              res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: part2.text } }] })}
+
+`);
+            } else if (part2?.functionCall) {
+              const calls = candidate2.content.parts.filter((p) => p.functionCall).map((p, idx) => ({
+                index: idx,
+                id: "call_" + Math.random().toString(36).substr(2, 9),
+                type: "function",
+                function: {
+                  name: p.functionCall.name,
+                  arguments: JSON.stringify(p.functionCall.args)
+                }
+              }));
+              res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: calls } }] })}
+
+`);
+            }
+          }
+          res.write("data: [DONE]\n\n");
+          return res.end();
+        }
         const response = await ai.models.generateContent({
           model: model || "gemini-2.5-flash",
           contents,
@@ -175,10 +227,15 @@ async function startServer() {
         }
       } else if (provider === "ollama") {
         const { ollamaUrl } = req.body;
-        const baseUrl = ollamaUrl || "http://localhost:11434";
+        let url = (ollamaUrl || "http://localhost:11434").trim().replace(/\/+$/, "");
+        if (!/^https?:\/\//i.test(url)) {
+          url = "http://" + url;
+        }
+        const rootUrl = url.endsWith("/v1") ? url.slice(0, -3).replace(/\/+$/, "") : url;
+        const v1Url = `${rootUrl}/v1`;
         const openai = new import_openai.default({
           apiKey: "ollama",
-          baseURL: `${baseUrl.replace(/\/$/, "")}/v1`
+          baseURL: v1Url
         });
         const cleanMessages = messages.map((m) => {
           const cleanMsg = { role: m.role, content: m.content || null };
@@ -187,6 +244,24 @@ async function startServer() {
           if (m.tool_call_id) cleanMsg.tool_call_id = m.tool_call_id;
           return cleanMsg;
         });
+        if (stream) {
+          res.setHeader("Content-Type", "text/event-stream");
+          res.setHeader("Cache-Control", "no-cache");
+          res.setHeader("Connection", "keep-alive");
+          const responseStream = await openai.chat.completions.create({
+            model: model || "llama3.2",
+            messages: cleanMessages,
+            tools: tools?.length > 0 ? tools : void 0,
+            stream: true
+          });
+          for await (const chunk of responseStream) {
+            res.write(`data: ${JSON.stringify(chunk)}
+
+`);
+          }
+          res.write("data: [DONE]\n\n");
+          return res.end();
+        }
         const response = await openai.chat.completions.create({
           model: model || "llama3.2",
           messages: cleanMessages,
@@ -222,12 +297,33 @@ async function startServer() {
         res.json(chatModels);
       } else if (provider === "ollama") {
         const { ollamaUrl } = req.body;
-        const baseUrl = ollamaUrl || "http://localhost:11434";
-        const response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/tags`);
-        if (!response.ok) throw new Error("Failed to fetch Ollama models");
-        const data = await response.json();
-        const chatModels = data.models.map((m) => m.name);
-        res.json(chatModels);
+        let url = (ollamaUrl || "http://localhost:11434").trim().replace(/\/+$/, "");
+        if (!/^https?:\/\//i.test(url)) {
+          url = "http://" + url;
+        }
+        const rootUrl = url.endsWith("/v1") ? url.slice(0, -3).replace(/\/+$/, "") : url;
+        const v1Url = `${rootUrl}/v1`;
+        try {
+          const response = await fetch(`${rootUrl}/api/tags`);
+          if (response.ok) {
+            const data = await response.json();
+            if (Array.isArray(data.models)) {
+              return res.json(data.models.map((m) => m.name || m.model || m.id));
+            }
+          }
+        } catch (e) {
+        }
+        try {
+          const response = await fetch(`${v1Url}/models`);
+          if (response.ok) {
+            const data = await response.json();
+            if (Array.isArray(data.data)) {
+              return res.json(data.data.map((m) => m.id));
+            }
+          }
+        } catch (e) {
+        }
+        throw new Error(`Failed to fetch models from ${rootUrl}`);
       } else {
         res.json([]);
       }

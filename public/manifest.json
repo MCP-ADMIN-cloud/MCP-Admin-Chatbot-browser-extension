@@ -21,16 +21,22 @@
   },
   "permissions": [
     "storage",
-    "sidePanel"
+    "sidePanel",
+    "declarativeNetRequest"
   ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "cors_rules",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  },
   "background": {
     "service_worker": "background.js"
   },
   "host_permissions": [
-    "*://*.mcpadmin.cloud/*",
-    "https://api.openai.com/*",
-    "https://generativelanguage.googleapis.com/*",
-    "http://localhost/*",
-    "http://127.0.0.1/*"
+    "<all_urls>"
   ]
 }
