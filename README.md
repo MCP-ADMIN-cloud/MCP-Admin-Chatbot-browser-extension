@@ -1,4 +1,5 @@
 # MCP Admin Chrome Extension
+<img width="1841" height="1062" alt="image" src="https://github.com/user-attachments/assets/09536a88-4299-44d8-9771-60a7b4aaff6d" />
 
 Welcome to the MCP Admin Chrome Extension! This powerful tool allows you to connect directly to your managed Model Context Protocol (MCP) servers and interact with them using advanced LLMs (Gemini, OpenAI, or local Ollama models) right from your browser's side panel.
 
